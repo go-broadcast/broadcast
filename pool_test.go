@@ -6,12 +6,12 @@ import (
 	"time"
 )
 
-func TestPool_Do(t *testing.T) {
+func TestPool_do(t *testing.T) {
 	p := createTestPool()
 
 	called := false
 	done := make(chan struct{})
-	p.Do(func() {
+	p.do(func() {
 		called = true
 		close(done)
 	})
@@ -22,10 +22,10 @@ func TestPool_Do(t *testing.T) {
 	}
 }
 
-func TestPool_Do_WorkerShouldNotExit(t *testing.T) {
+func TestPool_do_WorkerShouldNotExit(t *testing.T) {
 	p := createTestPool()
 
-	p.Do(func() {})
+	p.do(func() {})
 	<-time.After(time.Millisecond * 200)
 
 	workers := len(p.tickets)
@@ -34,11 +34,11 @@ func TestPool_Do_WorkerShouldNotExit(t *testing.T) {
 	}
 }
 
-func TestPool_Do_WorkerShouldExitAfterTimeout(t *testing.T) {
+func TestPool_do_WorkerShouldExitAfterTimeout(t *testing.T) {
 	p := createTestPool()
 	p.timeout = time.Millisecond
 
-	p.Do(func() {})
+	p.do(func() {})
 	<-time.After(time.Millisecond * 200)
 
 	workers := len(p.tickets)
@@ -47,7 +47,7 @@ func TestPool_Do_WorkerShouldExitAfterTimeout(t *testing.T) {
 	}
 }
 
-func TestPool_Do_CapacityReached(t *testing.T) {
+func TestPool_do_CapacityReached(t *testing.T) {
 	p := createTestPool()
 	taskCount := 20
 	var workerCount int32 = 10
@@ -55,7 +55,7 @@ func TestPool_Do_CapacityReached(t *testing.T) {
 	var startedTasks int32 = 0
 
 	for i := 0; i < taskCount; i++ {
-		go p.Do(func() {
+		go p.do(func() {
 			atomic.AddInt32(&startedTasks, 1)
 			<-time.After(time.Second * 3)
 		})
@@ -68,18 +68,18 @@ func TestPool_Do_CapacityReached(t *testing.T) {
 	}
 }
 
-func TestPool_Do_TaskIsPassedToFreeWorker(t *testing.T) {
+func TestPool_do_TaskIsPassedToFreeWorker(t *testing.T) {
 	p := createTestPool()
 	workerCount := 10
 	p.tickets = make(chan struct{}, workerCount)
 
 	for i := 0; i < workerCount; i++ {
-		p.Do(func() {})
+		p.do(func() {})
 	}
 
 	called := false
 	done := make(chan struct{})
-	p.Do(func() {
+	p.do(func() {
 		called = true
 		close(done)
 	})
@@ -90,8 +90,38 @@ func TestPool_Do_TaskIsPassedToFreeWorker(t *testing.T) {
 	}
 }
 
+func TestPool_cancel_ShouldCancelWorkersAndPendingTasks(t *testing.T) {
+	p := createTestPool()
+	release := make(chan struct{})
+
+	p.do(func() {
+		<-release
+	})
+	pendingCanceled := make(chan struct{})
+	go func() {
+		p.do(func() {})
+		pendingCanceled <- struct{}{}
+	}()
+
+	canceledc := make(chan struct{})
+	go func() {
+		p.cancel()
+		close(canceledc)
+	}()
+	<-pendingCanceled
+	close(release)
+
+	select {
+	case <-canceledc:
+		return
+	case <-time.After(time.Second * 3):
+		t.Fatalf("cancel didn't force all workers to stop")
+	}
+}
+
 func createTestPool() *pool {
 	return &pool{
+		cancelc: make(chan struct{}),
 		tickets: make(chan struct{}, 1),
 		tasks:   make(chan func()),
 		timeout: time.Minute * 5,

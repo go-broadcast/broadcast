@@ -8,7 +8,7 @@ import (
 )
 
 func TestBroadcaster_New(t *testing.T) {
-	_, err := New()
+	_, _, err := New()
 
 	if err != nil {
 		t.Fatalf("New returned error - %v, want nil error", err)
@@ -16,7 +16,7 @@ func TestBroadcaster_New(t *testing.T) {
 }
 
 func TestBroadcaster_New_WithInvalidOption(t *testing.T) {
-	_, err := New(
+	_, _, err := New(
 		WithPoolSize(-1),
 	)
 
@@ -38,6 +38,27 @@ func TestBroadcaster_New_ShouldSetDispatcherCallback(t *testing.T) {
 
 	if callback == nil {
 		t.Fatalf("New should pass a callback to dispatcher's Received method")
+	}
+}
+
+func TestBroadcaster_Done_ShouldBeClosed(t *testing.T) {
+	broadcaster, cancel, _ := New(
+		WithPoolSize(1),
+	)
+	releasec := make(chan struct{})
+	broadcaster.Subscribe(func(data interface{}) {
+		<-releasec
+	})
+	broadcaster.ToAll(struct{}{})
+
+	cancel()
+	close(releasec)
+
+	select {
+	case <-broadcaster.Done():
+		return
+	case <-time.After(time.Second * 3):
+		t.Fatalf("Canceling the broadcaster didn't close the Done channel")
 	}
 }
 
@@ -271,7 +292,7 @@ func TestBroadcaster_ToAll_ShouldDispatch(t *testing.T) {
 			close(done)
 		},
 	}
-	b, _ := New(WithDispatcher(&dispatcher))
+	b, _, _ := New(WithDispatcher(&dispatcher))
 	b.Subscribe(func(_ interface{}) {})
 
 	b.ToAll(struct{}{})
@@ -283,14 +304,14 @@ func TestBroadcaster_ToAll_ShouldDispatch(t *testing.T) {
 }
 
 func TestBroadcaster_ToAll_WithMissingDefaultRoom(t *testing.T) {
-	b, _ := New()
+	b, _, _ := New()
 
 	b.ToAll(struct{}{})
 	<-time.After(time.Millisecond * 200)
 }
 
 func TestBroadcaster_ToAll_ExceptMissingRoom(t *testing.T) {
-	b, _ := New()
+	b, _, _ := New()
 	called := false
 	done := make(chan struct{})
 	b.Subscribe(func(_ interface{}) {
@@ -313,7 +334,7 @@ func TestBroadcaster_ReceivedToAllMessage(t *testing.T) {
 			callback = c
 		},
 	}
-	b, _ := New(WithDispatcher(&dispatcher))
+	b, _, _ := New(WithDispatcher(&dispatcher))
 
 	called := false
 	done := make(chan struct{})
@@ -398,7 +419,7 @@ func TestBroadcaster_ToRoom_ShouldDispatch(t *testing.T) {
 			close(done)
 		},
 	}
-	b, _ := New(WithDispatcher(&dispatcher))
+	b, _, _ := New(WithDispatcher(&dispatcher))
 	subscription := b.Subscribe(func(_ interface{}) {})
 	room := "test-room"
 	b.JoinRoom(subscription, room)
@@ -418,7 +439,7 @@ func TestBroadcaster_ReceivedRoomMessage(t *testing.T) {
 			callback = c
 		},
 	}
-	b, _ := New(WithDispatcher(&dispatcher))
+	b, _, _ := New(WithDispatcher(&dispatcher))
 
 	called := false
 	done := make(chan struct{})

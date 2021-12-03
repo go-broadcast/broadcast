@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	broadcaster, err := broadcast.New()
+	broadcaster, cancel, err := broadcast.New()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -35,6 +35,9 @@ func main() {
 
 	broadcaster.ToRoom("Bye, chat!", "chat-room")
 	broadcaster.Unsubscribe(subscription)
+
+	cancel()
+	<-broadcaster.Done()
 }
 ```
 

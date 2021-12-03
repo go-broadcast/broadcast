@@ -1,3 +1,6 @@
+// A small utility that allows you to distribute messages to groups of long-lived connections.
+// The implementation is connection ignorant so it could be used with different communication
+// mechanisms like web sockets and gRPC server streams.
 package broadcast
 
 import (
@@ -17,13 +20,14 @@ type Broadcaster interface {
 	ToAll(data interface{}, except ...string)
 	ToRoom(data interface{}, room string, except ...string)
 	RoomsOf(s *Subscription) []string
+	Done() <-chan struct{}
 }
 
 // Option is used to change broadcaster settings.
 type Option func(b *broadcaster) error
 
 // WithPoolSize limits the amount of go routines that can be used when sending
-// messages to a huge number of subscribers. Default is 1000.
+// messages to a large number of subscribers. Default is 100.
 func WithPoolSize(size int) Option {
 	return func(b *broadcaster) error {
 		if size <= 0 {
@@ -66,9 +70,13 @@ func WithDefaultRoomName(name string) Option {
 	}
 }
 
+// CancelFunc represents a function used to cancel all go routines used by the Broadcaster.
+type CancelFunc func()
+
 // New creates a new Broadcaster.
-func New(options ...Option) (Broadcaster, error) {
+func New(options ...Option) (Broadcaster, CancelFunc, error) {
 	pool := &pool{
+		cancelc: make(chan struct{}),
 		tickets: make(chan struct{}, defaultPoolSize),
 		tasks:   make(chan func()),
 		timeout: defaultPoolTimeout,
@@ -80,13 +88,14 @@ func New(options ...Option) (Broadcaster, error) {
 		mux:             &mux,
 		dispatcher:      &noopDispatcher{},
 		defaultRoomName: "default",
+		done:            make(chan struct{}),
 	}
 
 	for _, option := range options {
 		err := option(b)
 
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -99,7 +108,14 @@ func New(options ...Option) (Broadcaster, error) {
 		b.toRoomLocal(data, room, except...)
 	})
 
-	return b, nil
+	cancel := func() {
+		go func() {
+			b.pool.cancel()
+			close(b.done)
+		}()
+	}
+
+	return b, cancel, nil
 }
 
 type broadcaster struct {
@@ -108,6 +124,12 @@ type broadcaster struct {
 	rooms           map[string]*room
 	dispatcher      Dispatcher
 	defaultRoomName string
+	done            chan struct{}
+}
+
+// Done returns a channel that is closed when all internal go routines exit.
+func (b *broadcaster) Done() <-chan struct{} {
+	return b.done
 }
 
 // Subscribe creates a new subscription.
@@ -196,7 +218,7 @@ func (b *broadcaster) toAllLocal(data interface{}, except ...string) {
 
 	for _, sub := range defaultRoom.subscriptions {
 		s := sub
-		b.pool.Do(func() {
+		b.pool.do(func() {
 			if b.isInRooms(s, except...) {
 				return
 			}
@@ -226,7 +248,7 @@ func (b *broadcaster) toRoomLocal(data interface{}, room string, except ...strin
 
 	for _, sub := range existingRoom.subscriptions {
 		s := sub
-		b.pool.Do(func() {
+		b.pool.do(func() {
 			if b.isInRooms(s, except...) {
 				return
 			}
